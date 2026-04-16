@@ -1,0 +1,22 @@
+{
+  "vae_model_file": "leakage_vae_fixed.keras",
+  "vae_threshold": 17.42781872206906,
+  "threshold_pct": 97,
+  "use_focused_error": true,
+  "payment_col_indices": [
+    0,
+    1,
+    3,
+    4,
+    6,
+    8,
+    17,
+    7,
+    15,
+    16
+  ],
+  "clip_val": 15.0,
+  "latent_dim": 16,
+  "kl_weight": 0.001,
+  "scaler_type": "RobustScaler"
+}
