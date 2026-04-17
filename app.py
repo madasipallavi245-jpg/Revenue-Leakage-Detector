@@ -32,8 +32,8 @@ def load_model():
     import tensorflow as tf
     from tensorflow import keras
 
-    # ── Register VAE class so Keras can deserialize the .keras file ──
-    @keras.saving.register_keras_serializable(package="Custom")
+    # ── Define VAE class ──────────────────────────────────────
+    @keras.saving.register_keras_serializable()
     class VAE(keras.Model):
         def __init__(self, input_dim=129, latent_dim=16, **kwargs):
             super().__init__(**kwargs)
@@ -41,15 +41,15 @@ def load_model():
             self.latent_dim = latent_dim
 
             # Encoder
-            self.enc1       = keras.layers.Dense(64, activation="relu")
-            self.enc2       = keras.layers.Dense(32, activation="relu")
-            self.z_mean_l   = keras.layers.Dense(latent_dim, name="z_mean")
-            self.z_log_var_l= keras.layers.Dense(latent_dim, name="z_log_var")
+            self.enc1        = keras.layers.Dense(64, activation="relu")
+            self.enc2        = keras.layers.Dense(32, activation="relu")
+            self.z_mean_l    = keras.layers.Dense(latent_dim, name="z_mean")
+            self.z_log_var_l = keras.layers.Dense(latent_dim, name="z_log_var")
 
             # Decoder
-            self.dec1       = keras.layers.Dense(32, activation="relu")
-            self.dec2       = keras.layers.Dense(64, activation="relu")
-            self.dec_out    = keras.layers.Dense(input_dim, activation="linear")
+            self.dec1    = keras.layers.Dense(32, activation="relu")
+            self.dec2    = keras.layers.Dense(64, activation="relu")
+            self.dec_out = keras.layers.Dense(input_dim, activation="linear")
 
         def encode(self, x):
             h = self.enc1(x)
@@ -91,11 +91,10 @@ def load_model():
     # Load scaler
     scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
 
-    # Load VAE model — custom class is now registered above
-    vae = keras.models.load_model(
-        os.path.join(BASE, "leakage_vae_fixed.keras"),
-        compile=False
-    )
+    # Build VAE from scratch and load saved weights
+    vae = VAE(input_dim=129, latent_dim=16)
+    _ = vae(tf.zeros((1, 129)))  # build the model weights
+    vae.load_weights(os.path.join(BASE, "leakage_vae_fixed.keras"))
 
     return vae, scaler, config
 
@@ -218,10 +217,10 @@ def predict_leakage(df_features: pd.DataFrame,
     Run the exact same inference pipeline as your notebook Cell 7.
     Returns original df with risk_score and leakage_flag columns added.
     """
-    CLIP_VAL     = config["clip_val"]
-    threshold    = config["vae_threshold"]
-    use_focused  = config["use_focused_error"]
-    pay_idx      = config["payment_col_indices"]
+    CLIP_VAL    = config["clip_val"]
+    threshold   = config["vae_threshold"]
+    use_focused = config["use_focused_error"]
+    pay_idx     = config["payment_col_indices"]
 
     # Separate label if present
     labels = None
@@ -249,9 +248,9 @@ def predict_leakage(df_features: pd.DataFrame,
     flags = (scores > threshold).astype(int)
 
     result = pd.DataFrame({
-        "risk_score":    np.round(scores, 6),
-        "leakage_flag":  flags,
-        "risk_level":    pd.cut(
+        "risk_score":   np.round(scores, 6),
+        "leakage_flag": flags,
+        "risk_level":   pd.cut(
             scores,
             bins=[-np.inf, threshold * 0.5,
                   threshold, threshold * 2, np.inf],
