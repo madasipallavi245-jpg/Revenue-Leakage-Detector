@@ -33,7 +33,7 @@ def load_model():
     from tensorflow import keras
 
     # ── Define VAE class ──────────────────────────────────────
-    @keras.saving.register_keras_serializable()
+    @keras.saving.register_keras_serializable(package="", name="VAE")
     class VAE(keras.Model):
         def __init__(self, input_dim=129, latent_dim=16, **kwargs):
             super().__init__(**kwargs)
@@ -91,8 +91,8 @@ def load_model():
     # Load scaler
     scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
 
-    # Load VAE — class already registered via @register_keras_serializable above.
-    # Do NOT pass custom_objects (triggers 'str has no attribute name' bug in Keras 2.x).
+    # Load VAE — decorator above registers the class with registered_name="VAE"
+    # which exactly matches what is stored in leakage_vae_fixed.keras
     vae = keras.models.load_model(
         os.path.join(BASE, "leakage_vae_fixed.keras"),
         compile=False,
