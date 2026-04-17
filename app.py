@@ -6,8 +6,11 @@ import joblib
 import os
 import tensorflow as tf
 import keras
+import warnings
 
-# ── 1. VAE CLASS ─────────────────────────────────────────────
+warnings.filterwarnings("ignore")
+
+# ── 1. VAE CLASS (Must be at the top level) ──────────────────
 @keras.saving.register_keras_serializable()
 class VAE(keras.Model): 
     def __init__(self, encoder, decoder, kl_weight=0.001, **kwargs):
@@ -25,37 +28,37 @@ class VAE(keras.Model):
         self.add_loss(self.kl_weight * kl_loss)
         return reconstruction
 
-# ── 2. LOADING WITH DEBUGGING ────────────────────────────────
+# ── 2. LOADING LOGIC ────────────────────────────────────────
 @st.cache_resource
 def load_artefacts():
-    # Force the path to the current working directory
-    base_path = os.getcwd()
+    # This looks exactly where app.py is sitting
+    base_path = os.path.dirname(os.path.abspath(__file__))
     
-    config_fn = "leakage_vae_config.json"
-    scaler_fn = "leakage_robust_scaler.pkl"
-    model_fn  = "leakage_vae_fixed.keras"
+    config_path = os.path.join(base_path, "leakage_vae_config.json")
+    scaler_path = os.path.join(base_path, "leakage_robust_scaler.pkl")
+    model_path  = os.path.join(base_path, "leakage_vae_fixed.keras")
 
     # Load artifacts
-    with open(os.path.join(base_path, config_fn), "r") as f:
+    with open(config_path, "r") as f:
         config = json.load(f)
-    scaler = joblib.load(os.path.join(base_path, scaler_fn))
-    vae = keras.models.load_model(os.path.join(base_path, model_fn), compile=False)
+    scaler = joblib.load(scaler_path)
+    vae = keras.models.load_model(model_path, compile=False)
 
     return vae, scaler, config
 
-# ── 3. UI ────────────────────────────────────────────────────
+# ── 3. UI ───────────────────────────────────────────────────
 st.title("🔍 Revenue Leakage Detector")
 
-# DEBUGGER: Show what files Streamlit actually sees
-with st.expander("Folder Debugger (Check if files exist)"):
-    st.write("Current Directory:", os.getcwd())
-    st.write("Files found in folder:", os.listdir(os.getcwd()))
+# DEBUGGER: If this fails, this list will tell us why
+with st.expander("System File Check"):
+    current_files = os.listdir(os.path.dirname(os.path.abspath(__file__)))
+    st.write("Files Streamlit sees in GitHub:", current_files)
 
 try:
     vae, scaler, config = load_artefacts()
-    st.success("Model Loaded Successfully!")
+    st.success("All models loaded!")
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"File Error: {e}")
     st.stop()
 
-# ... (Add your file_uploader and predict code here) ...
+# ... (Add your upload and prediction code here)
