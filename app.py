@@ -91,11 +91,12 @@ def load_model():
     # Load scaler
     scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
 
-    # Load VAE — pass the registered class as a custom object
+    # Load VAE — class already registered via @register_keras_serializable above.
+    # Do NOT pass custom_objects (triggers 'str has no attribute name' bug in Keras 2.x).
     vae = keras.models.load_model(
         os.path.join(BASE, "leakage_vae_fixed.keras"),
-        custom_objects={"VAE": VAE},
         compile=False,
+        safe_mode=False,
     )
 
     return vae, scaler, config
