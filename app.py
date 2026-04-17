@@ -91,10 +91,12 @@ def load_model():
     # Load scaler
     scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
 
-    # Build VAE from scratch and load saved weights
-    vae = VAE(input_dim=129, latent_dim=16)
-    _ = vae(tf.zeros((1, 129)))  # build the model weights
-    vae.load_weights(os.path.join(BASE, "leakage_vae_fixed.keras"))
+    # Load VAE — pass the registered class as a custom object
+    vae = keras.models.load_model(
+        os.path.join(BASE, "leakage_vae_fixed.keras"),
+        custom_objects={"VAE": VAE},
+        compile=False,
+    )
 
     return vae, scaler, config
 
