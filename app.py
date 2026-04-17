@@ -17,8 +17,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── 1. VAE CLASS DEFINITION ──────────────────────────────────
-# This must be at the top level for Keras to load the model
+# ── 1. VAE CLASS DEFINITION (Must be Top Level) ──────────────
 @keras.saving.register_keras_serializable()
 class VAE(keras.Model): 
     def __init__(self, encoder, decoder, kl_weight=0.001, **kwargs):
@@ -36,25 +35,32 @@ class VAE(keras.Model):
         self.add_loss(self.kl_weight * kl_loss)
         return reconstruction
 
-# ── 2. DATA LOADING FUNCTIONS ────────────────────────────────
+# ── 2. ROBUST DATA LOADING ──────────────────────────────────
 @st.cache_resource
 def load_artefacts():
-    # Use absolute paths to find files in the same directory as app.py
+    # Use absolute path to the directory containing app.py
     BASE = os.path.dirname(os.path.abspath(__file__))
     
-    config_path = os.path.join(BASE, "leakage_vae_config.json")
-    scaler_path = os.path.join(BASE, "leakage_robust_scaler.pkl")
-    model_path  = os.path.join(BASE, "leakage_vae_fixed.keras")
+    files = {
+        "config": os.path.join(BASE, "leakage_vae_config.json"),
+        "scaler": os.path.join(BASE, "leakage_robust_scaler.pkl"),
+        "model":  os.path.join(BASE, "leakage_vae_fixed.keras")
+    }
+
+    # DEBUG: Check if files actually exist
+    missing_files = [name for name, path in files.items() if not os.path.exists(path)]
+    if missing_files:
+        raise FileNotFoundError(f"Missing files in GitHub: {', '.join(missing_files)}")
 
     # Load config
-    with open(config_path, "r") as f:
+    with open(files["config"], "r") as f:
         config = json.load(f)
 
     # Load scaler
-    scaler = joblib.load(scaler_path)
+    scaler = joblib.load(files["scaler"])
 
     # Load VAE model
-    vae = keras.models.load_model(model_path, compile=False)
+    vae = keras.models.load_model(files["model"], compile=False)
 
     return vae, scaler, config
 
@@ -62,19 +68,18 @@ def load_artefacts():
 def engineer_features(df_raw: pd.DataFrame):
     df = df_raw.copy()
     
-    # Feature engineering logic from your notebook
+    # Target derivation (for internal metrics)
     if "expected_total" in df.columns and "payment_value" in df.columns:
         df["has_leakage"] = (abs(df["payment_value"] - df["expected_total"]) > 1.0).astype(int)
 
-    # Drop non-numeric/ID columns for prediction
+    # Drop non-numeric and identifying columns
     drop_cols = ["order_id", "customer_id", "product_id", "order_status", 
                  "payment_type", "customer_state", "product_category_name_english"]
     df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True, errors='ignore')
 
-    # Convert date strings to numbers or drop them
-    for col in df.select_dtypes(include=['object']).columns:
-        df.drop(columns=[col], inplace=True)
-
+    # Remove any remaining text/object columns
+    df = df.select_dtypes(include=[np.number])
+    
     df = df.fillna(0)
     return df
 
@@ -103,21 +108,24 @@ st.title("🔍 Revenue Leakage Detection")
 
 try:
     vae, scaler, config = load_artefacts()
-    st.success("All systems go! Model and artefacts loaded.")
+    st.success("Model and Configuration loaded successfully!")
 except Exception as e:
-    st.error(f"Critical Error: {e}")
+    st.error(f"Setup Error: {e}")
+    st.info("Ensure the .keras, .pkl, and .json files are uploaded to your GitHub repository.")
     st.stop()
 
-uploaded = st.file_uploader("Upload your transaction CSV", type=["csv"])
+uploaded = st.file_uploader("Upload your transactions CSV", type=["csv"])
 
 if uploaded:
     df_raw = pd.read_csv(uploaded)
-    if st.button("Analyze Data"):
+    if st.button("Start Detection"):
         with st.spinner("Analyzing..."):
-            df_feats = engineer_features(df_raw)
-            results = predict_leakage(df_feats, vae, scaler, config)
-            df_final = pd.concat([df_raw, results], axis=1)
-            
-            st.subheader("Results Overview")
-            st.write(f"Flagged {results['leakage_flag'].sum()} suspicious transactions.")
-            st.dataframe(df_final[df_final["leakage_flag"] == 1])
+            try:
+                df_feats = engineer_features(df_raw)
+                results = predict_leakage(df_feats, vae, scaler, config)
+                df_final = pd.concat([df_raw, results], axis=1)
+                
+                st.subheader("Anomalous Transactions Detected")
+                st.dataframe(df_final[df_final["leakage_flag"] == 1])
+            except Exception as e:
+                st.error(f"Processing Error: {e}")
