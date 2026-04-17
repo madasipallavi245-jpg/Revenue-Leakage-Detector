@@ -32,6 +32,56 @@ def load_model():
     import tensorflow as tf
     from tensorflow import keras
 
+    # ── Register VAE class so Keras can deserialize the .keras file ──
+    @keras.saving.register_keras_serializable(package="Custom")
+    class VAE(keras.Model):
+        def __init__(self, input_dim=129, latent_dim=16, **kwargs):
+            super().__init__(**kwargs)
+            self.input_dim  = input_dim
+            self.latent_dim = latent_dim
+
+            # Encoder
+            self.enc1       = keras.layers.Dense(64, activation="relu")
+            self.enc2       = keras.layers.Dense(32, activation="relu")
+            self.z_mean_l   = keras.layers.Dense(latent_dim, name="z_mean")
+            self.z_log_var_l= keras.layers.Dense(latent_dim, name="z_log_var")
+
+            # Decoder
+            self.dec1       = keras.layers.Dense(32, activation="relu")
+            self.dec2       = keras.layers.Dense(64, activation="relu")
+            self.dec_out    = keras.layers.Dense(input_dim, activation="linear")
+
+        def encode(self, x):
+            h = self.enc1(x)
+            h = self.enc2(h)
+            return self.z_mean_l(h), self.z_log_var_l(h)
+
+        def reparameterize(self, z_mean, z_log_var):
+            eps = tf.random.normal(shape=tf.shape(z_mean))
+            return z_mean + tf.exp(0.5 * z_log_var) * eps
+
+        def decode(self, z):
+            h = self.dec1(z)
+            h = self.dec2(h)
+            return self.dec_out(h)
+
+        def call(self, inputs):
+            z_mean, z_log_var = self.encode(inputs)
+            z = self.reparameterize(z_mean, z_log_var)
+            return self.decode(z)
+
+        def get_config(self):
+            config = super().get_config()
+            config.update({
+                "input_dim":  self.input_dim,
+                "latent_dim": self.latent_dim,
+            })
+            return config
+
+        @classmethod
+        def from_config(cls, config):
+            return cls(**config)
+
     BASE = os.path.dirname(__file__)
 
     # Load config (thresholds, column indices, etc.)
@@ -41,7 +91,7 @@ def load_model():
     # Load scaler
     scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
 
-    # Load VAE model
+    # Load VAE model — custom class is now registered above
     vae = keras.models.load_model(
         os.path.join(BASE, "leakage_vae_fixed.keras"),
         compile=False
@@ -330,7 +380,6 @@ if uploaded is not None:
         st.subheader("Risk level breakdown")
         risk_counts = results["risk_level"].value_counts().reset_index()
         risk_counts.columns = ["Risk Level", "Count"]
-        # Order
         order = ["Critical", "High", "Medium", "Low"]
         risk_counts["Risk Level"] = pd.Categorical(
             risk_counts["Risk Level"], categories=order, ordered=True
@@ -389,7 +438,6 @@ if uploaded is not None:
         if len(flagged_df) == 0:
             st.success("No leakage detected in this batch.")
         else:
-            # Colour risk level
             def colour_risk(val):
                 colours = {
                     "Critical": "background-color:#FCEBEB;color:#791F1F",
