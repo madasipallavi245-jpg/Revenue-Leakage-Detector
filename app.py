@@ -26,33 +26,74 @@ st.set_page_config(
 def load_model():
     """
     Rebuild the EXACT same VAE architecture used in the notebook,
-    then load the saved weights from leakage_vae_fixed.keras.
+    then load ONLY THE WEIGHTS from leakage_vae_fixed.keras.
 
-    The saved file was built with:
-      - A Sampling layer (subclass of layers.Layer)
-      - encoder = Model(inputs, [z_mean, z_log_var, z])
-      - decoder = Model(latent_input, output)
-      - VAE(encoder, decoder) wrapping both
-
-    We must register ALL custom classes before calling load_model().
+    WHY weights-only?
+    The .keras file was saved without get_config/from_config on the VAE
+    class, so Keras cannot reconstruct encoder/decoder from the config.
+    The fix is to rebuild the architecture identically (INPUT_DIM=129,
+    LATENT_DIM=16, same layer names) and then call load_weights(), which
+    matches by layer name and bypasses the broken deserialisation path.
     """
     import tensorflow as tf
-    from tensorflow import keras
-    from tensorflow.keras import layers, Model
+    import keras
+    from keras import layers, Model
+    import numpy as np
 
-    # ── 1. Register the Sampling layer ───────────────────────
-    @keras.saving.register_keras_serializable(package="vae_pkg", name="Sampling")
+    BASE = os.path.dirname(os.path.abspath(__file__))
+
+    # Load config (thresholds, column indices etc.)
+    with open(os.path.join(BASE, "leakage_vae_config.json"), "r") as f:
+        cfg = json.load(f)
+
+    # Load scaler
+    scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
+
+    # ── Rebuild architecture exactly as in the training notebook ──
+    INPUT_DIM  = 129          # fixed by the saved weights
+    LATENT_DIM = cfg.get("latent_dim", 16)
+    KL_WEIGHT  = cfg.get("kl_weight", 0.001)
+
     class Sampling(layers.Layer):
         def call(self, inputs):
             z_mean, z_log_var = inputs
             eps = tf.random.normal(shape=tf.shape(z_mean))
             return z_mean + tf.exp(0.5 * z_log_var) * eps
 
-        def get_config(self):
-            return super().get_config()
+    # Encoder
+    enc_in = keras.Input(shape=(INPUT_DIM,), name="enc_input")
+    x = layers.Dense(128, name="enc_d1")(enc_in)
+    x = layers.BatchNormalization(name="enc_bn1")(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dropout(0.1, name="enc_drop1")(x)
+    x = layers.Dense(64, name="enc_d2")(x)
+    x = layers.BatchNormalization(name="enc_bn2")(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dropout(0.1, name="enc_drop2")(x)
+    x = layers.Dense(32, name="enc_d3")(x)
+    x = layers.BatchNormalization(name="enc_bn3")(x)
+    x = layers.Activation("relu")(x)
+    z_mean    = layers.Dense(LATENT_DIM, name="z_mean",
+                    activity_regularizer=keras.regularizers.l1(1e-4))(x)
+    z_log_var = layers.Dense(LATENT_DIM, name="z_log_var")(x)
+    z         = Sampling(name="z_sample")([z_mean, z_log_var])
+    encoder   = Model(enc_in, [z_mean, z_log_var, z], name="encoder")
 
-    # ── 2. Register the VAE wrapper ───────────────────────────
-    @keras.saving.register_keras_serializable(package="vae_pkg", name="VAE")
+    # Decoder
+    dec_in = keras.Input(shape=(LATENT_DIM,), name="dec_input")
+    x = layers.Dense(32, name="dec_d1")(dec_in)
+    x = layers.BatchNormalization(name="dec_bn1")(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dense(64, name="dec_d2")(x)
+    x = layers.BatchNormalization(name="dec_bn2")(x)
+    x = layers.Activation("relu")(x)
+    x = layers.Dense(128, name="dec_d3")(x)
+    x = layers.BatchNormalization(name="dec_bn3")(x)
+    x = layers.Activation("relu")(x)
+    dec_out = layers.Dense(INPUT_DIM, activation="linear", name="dec_output")(x)
+    decoder = Model(dec_in, dec_out, name="decoder")
+
+    # VAE wrapper
     class VAE(Model):
         def __init__(self, encoder, decoder, kl_weight=0.001, **kwargs):
             super().__init__(**kwargs)
@@ -69,34 +110,17 @@ def load_model():
             self.add_loss(self.kl_weight * kl_loss)
             return reconstruction
 
-        def get_config(self):
-            config = super().get_config()
-            config.update({"kl_weight": self.kl_weight})
-            return config
+    vae = VAE(encoder, decoder, kl_weight=KL_WEIGHT, name="vae_fixed")
+    vae.compile(optimizer="adam", loss="mse")
 
-        @classmethod
-        def from_config(cls, config):
-            # encoder/decoder are restored by Keras automatically
-            return cls(**config)
+    # Build the model with a dummy forward pass so weights are initialised
+    dummy = np.zeros((1, INPUT_DIM), dtype="float32")
+    _ = vae(dummy)
 
-    BASE = os.path.dirname(os.path.abspath(__file__))
+    # Load WEIGHTS ONLY — bypasses the broken from_config path
+    vae.load_weights(os.path.join(BASE, "leakage_vae_fixed.keras"))
 
-    # Load config (thresholds, column indices etc.)
-    with open(os.path.join(BASE, "leakage_vae_config.json"), "r") as f:
-        config = json.load(f)
-
-    # Load scaler
-    scaler = joblib.load(os.path.join(BASE, "leakage_robust_scaler.pkl"))
-
-    # Load VAE — all custom classes are now registered above
-    vae = keras.models.load_model(
-        os.path.join(BASE, "leakage_vae_fixed.keras"),
-        custom_objects={"Sampling": Sampling, "VAE": VAE},
-        compile=False,
-        safe_mode=False,
-    )
-
-    return vae, scaler, config
+    return vae, scaler, cfg
 
 
 # ── Feature engineering — mirrors notebook Cell 2 exactly ───
